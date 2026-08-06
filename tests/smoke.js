@@ -4,7 +4,18 @@
 // Run the service first (npm start), then: node tests/smoke.js
 // Set BASE_URL and the 4 demo emails via env vars, or edit the defaults below.
 
+require('dotenv').config();
+const { createClient } = require('@supabase/supabase-js');
+
 const BASE_URL = process.env.BASE_URL || 'http://localhost:4001';
+
+// Used ONLY to simulate "the user clicked the real verification link" by
+// flipping accountStatus directly - same trick the Playwright suite's
+// markVerified.js helper uses. We can't read a real inbox in a script.
+const supabaseAdmin = createClient(
+  (process.env.SUPABASE_URL || '').replace(/\s+/g, ''),
+  (process.env.SUPABASE_SERVICE_KEY || '').replace(/\s+/g, ''),
+);
 
 // All 4 personas for the login-read checks. school_admin has no self-signup
 // in the real app (the signup role picker only offers student/teacher/parent),
@@ -63,6 +74,26 @@ async function main() {
     const roleBody = await roleRes.json();
     check('returns 200', roleRes.status === 200);
     check(`role is "${role}"`, roleBody.role === role);
+
+    // GET /user/check-verified is a plain read too.
+    console.log(`GET /user/check-verified for ${role} (${email})`);
+    const cvRes = await fetch(`${BASE_URL}/user/check-verified?email=${encodeURIComponent(email)}`);
+    const cvBody = await cvRes.json();
+    check('returns 200', cvRes.status === 200);
+    check('response has a verified field', typeof cvBody.verified === 'boolean');
+
+    // POST /user/send-password-reset doesn't write anything for a normal
+    // (non-synthetic-student) account - it only generates a Firebase link and
+    // sends an email - so it's safe to run against the real demo accounts too.
+    console.log(`POST /user/send-password-reset for ${role} (${email})`);
+    const resetRes = await fetch(`${BASE_URL}/user/send-password-reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const resetBody = await resetRes.json();
+    check('returns 200', resetRes.status === 200);
+    check('returns ok:true', resetBody.ok === true);
   }
 
   // ── Signup flow: /user/send-verification and /user/verify/:token ──────────
@@ -106,6 +137,31 @@ async function main() {
     const location = badTokenRes.headers.get('location') || '';
     check('redirects (3xx)', badTokenRes.status >= 300 && badTokenRes.status < 400);
     check('redirect has error=1 (bad token correctly rejected)', location.includes('error=1'));
+
+    console.log('GET /user/check-verified (should still be false - never actually verified)');
+    const cvBefore = await fetch(
+      `${BASE_URL}/user/check-verified?email=${encodeURIComponent(signupEmail)}`,
+    ).then((r) => r.json());
+    check('verified is false', cvBefore.verified === false);
+
+    // Simulate clicking the real link by flipping accountStatus directly -
+    // same effect as GET /user/verify/:token with a VALID token would have.
+    console.log('Marking verified directly in Supabase (simulates a real link click)');
+    const { data: existing } = await supabaseAdmin
+      .from('user_preferences')
+      .select('data')
+      .eq('user_email', signupEmail.toLowerCase())
+      .maybeSingle();
+    await supabaseAdmin.from('user_preferences').upsert(
+      { user_email: signupEmail.toLowerCase(), data: { ...(existing?.data ?? {}), accountStatus: 'active' } },
+      { onConflict: 'user_email' },
+    );
+
+    console.log('GET /user/check-verified (should now be true)');
+    const cvAfter = await fetch(
+      `${BASE_URL}/user/check-verified?email=${encodeURIComponent(signupEmail)}`,
+    ).then((r) => r.json());
+    check('verified is true', cvAfter.verified === true);
   }
 
   console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} CHECK(S) FAILED`}`);

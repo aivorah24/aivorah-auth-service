@@ -1,7 +1,8 @@
-// The login + signup logic: syncUserProfile (called on every login and
-// signup), getUserRole/sendVerification/verifyEmailToken (signup + email
-// verification). Grouped in one file because they're the same domain -
-// "who is this user, are they who they claim" - not because they're the
+// The login + signup + password-reset logic: syncUserProfile (called on
+// every login and signup), getUserRole/sendVerification/verifyEmailToken
+// (signup + email verification), sendPasswordReset (forgot password).
+// Grouped in one file because they're the same domain - "who is this user,
+// are they who they claim, let them back in" - not because they're the
 // same endpoint.
 //
 // Moved out of routes/user.js (was mixed in with photo upload, OTP, billing,
@@ -9,9 +10,10 @@
 
 const crypto = require('crypto');
 const supabase = require('./supabase');
+const firebaseAdmin = require('./firebaseAdmin');
 const { decrypt } = require('../utils/encryption');
 const { getPreferences } = require('./preferences');
-const { sendVerificationEmail } = require('./mailer');
+const { sendVerificationEmail, sendPasswordResetEmail } = require('./mailer');
 
 async function syncUserProfile(req, res) {
   try {
@@ -291,4 +293,122 @@ async function verifyEmailToken(req, res) {
   }
 }
 
-module.exports = { syncUserProfile, getUserRole, sendVerification, verifyEmailToken };
+// POST /user/send-password-reset — generates a Firebase password-reset link
+// and sends it from aivorah24@gmail.com. For @aivorah.student synthetic
+// accounts (no real inbox), delivers to the linked parent's email instead.
+async function sendPasswordReset(req, res) {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    const emailLc = email.trim().toLowerCase();
+
+    const { frontendOrigin } = req.body;
+    const appBase = frontendOrigin || 'https://aivorah.ai';
+    let resetLink = null;
+
+    // Synthetic student logins (@aivorah.student) have no real inbox — the
+    // Firebase credential lives on that email, but the reset email must be
+    // delivered to the parent's real address.
+    let deliverTo = emailLc;
+    let childName = null;
+    if (emailLc.endsWith('@aivorah.student')) {
+      const { data: childUser } = await supabase
+        .from('users').select('id, name').eq('email', emailLc).maybeSingle();
+      if (childUser?.id) {
+        const { data: link } = await supabase
+          .from('parent_children').select('parent_email').eq('child_id', childUser.id).maybeSingle();
+        if (link?.parent_email) {
+          deliverTo = link.parent_email.toLowerCase();
+          childName = childUser.name || 'your child';
+        }
+      }
+      if (deliverTo === emailLc) {
+        // No parent on file — nothing deliverable; don't leak existence.
+        console.warn('[send-password-reset] student account with no parent email:', emailLc);
+        return res.json({ ok: true, note: 'no_recipient' });
+      }
+    }
+
+    // 1. Try Firebase Admin SDK if service account is available
+    if (firebaseAdmin) {
+      try {
+        const actionCodeSettings = {
+          url: `${appBase}/reset-password`,
+          handleCodeInApp: false, // link opens in browser, not app
+        };
+        resetLink = await firebaseAdmin.auth().generatePasswordResetLink(emailLc, actionCodeSettings);
+      } catch (adminErr) {
+        if (adminErr.code === 'auth/user-not-found') return res.json({ ok: true });
+        console.warn('[send-password-reset] admin err:', adminErr.message);
+      }
+    }
+
+    // 2. Try Firebase REST API with returnOobLink (requires admin; may not work without service account)
+    if (!resetLink) {
+      const fbRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${process.env.FIREBASE_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestType: 'PASSWORD_RESET', email: emailLc, returnOobLink: true }),
+        }
+      );
+      const fbData = await fbRes.json();
+      if (fbData.oobLink) {
+        resetLink = fbData.oobLink;
+      } else if (fbData.error?.message === 'EMAIL_NOT_FOUND') {
+        return res.json({ ok: true }); // don't expose user enumeration
+      } else {
+        // returnOobLink not available without admin — fall back to Firebase sending its own email
+        console.warn('[send-password-reset] returnOobLink not available, using Firebase default sender');
+        await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${process.env.FIREBASE_API_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ requestType: 'PASSWORD_RESET', email: emailLc }),
+          }
+        );
+        return res.json({ ok: true, note: 'firebase_fallback' });
+      }
+    }
+
+    // Point the link at OUR themed /reset-password page instead of Firebase's
+    // generic firebaseapp.com action page. Firebase's link carries the oobCode
+    // as a query param — extract it and rebuild against the Aivorah frontend.
+    let themedLink = resetLink;
+    try {
+      const oob = new URL(resetLink).searchParams.get('oobCode');
+      if (oob) themedLink = `${appBase}/reset-password?oobCode=${encodeURIComponent(oob)}`;
+    } catch (_) { /* keep original link if parsing fails */ }
+
+    // 3. Send branded email from aivorah24@gmail.com (to parent for student accounts)
+    await sendPasswordResetEmail({ to: deliverTo, resetLink: themedLink, childName });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[send-password-reset]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /user/check-verified — returns accountStatus for an email, polled by
+// VerifyEmailScreen every 2s to detect when verification completes.
+async function checkVerified(req, res) {
+  try {
+    const email = (req.query.email || '').toLowerCase();
+    if (!email) return res.status(400).json({ error: 'email required' });
+
+    const { data: pref } = await supabase
+      .from('user_preferences')
+      .select('data')
+      .eq('user_email', email)
+      .maybeSingle();
+
+    const accountStatus = pref?.data?.accountStatus || null;
+    res.json({ verified: accountStatus === 'active', accountStatus });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+module.exports = { syncUserProfile, getUserRole, sendVerification, verifyEmailToken, sendPasswordReset, checkVerified };

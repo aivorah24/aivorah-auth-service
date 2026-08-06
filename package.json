@@ -1,7 +1,7 @@
 {
   "name": "aivorah-auth-service",
   "version": "1.0.0",
-  "description": "Aivorah login + signup microservice — extracted from ai-mentor/server/routes/user.js",
+  "description": "Aivorah auth microservice (login, signup, verification, password reset) — extracted from ai-mentor/server/routes/user.js",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -13,6 +13,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "firebase-admin": "^13.8.0",
     "nodemailer": "^6.10.1",
     "resend": "^6.12.3"
   },

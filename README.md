@@ -1,8 +1,9 @@
 # aivorah-auth-service
 
-The login + signup endpoints, extracted from `ai-mentor/server/routes/user.js`
-into their own standalone service — proves auth can build and run independently
-of the rest of the app (see `codebase-restructure-plan.md`, Phase 2).
+The full auth domain - login, signup, email verification, and password reset -
+extracted from `ai-mentor/server/routes/user.js` into its own standalone
+service. Proves auth can build and run independently of the rest of the app
+(see `codebase-restructure-plan.md`, Phase 2).
 
 **Status:** standalone proof only. The live `ai-mentor` app still runs its own
 copy of this code and has NOT been rewired to call this service — that's a
@@ -26,28 +27,34 @@ Runs `tests/smoke.js`. Requires the service to already be running (`npm start`
 in another terminal) and reachable Supabase + email credentials in `.env`.
 
 Two parts:
-1. **Login checks** — `/health`, `/user/sync`, `/user/role` against the real
-   student/teacher/parent/school_admin demo accounts (all 4 personas).
-   Read-only, safe to repeat.
-2. **Signup flow** — for each of student, teacher, and parent (the 3 roles
-   that can actually self-signup - `school_admin` accounts are provisioned
-   separately, not self-registered), creates a disposable throwaway account
-   (`/user/sync` with a name), sends it a real verification email
-   (`/user/send-verification`), then confirms a deliberately wrong token gets
-   rejected (`/user/verify/:token`). A fresh unique email is used each run
-   (same trick the Playwright signup specs in `aivorah-e2e-tests` use), so
-   it never touches or breaks the real demo accounts' verified state.
+1. **Login checks** — for all 4 personas (student/teacher/parent/school_admin
+   demo accounts): `/health`, `/user/sync`, `/user/role`, `/user/check-verified`,
+   `/user/send-password-reset`. All either read-only or non-destructive for an
+   existing account, safe to repeat.
+2. **Signup + verification flow** — for each of student, teacher, and parent
+   (the 3 roles that can actually self-signup - `school_admin` accounts are
+   provisioned separately, not self-registered): creates a disposable
+   throwaway account (`/user/sync` with a name), sends it a real verification
+   email (`/user/send-verification`), confirms a wrong token gets rejected
+   (`/user/verify/:token`), confirms `/user/check-verified` correctly reports
+   `false`, then flips `accountStatus` directly in Supabase (simulating a real
+   link click, since a script can't read a real inbox) and confirms
+   `/user/check-verified` now reports `true`. A fresh unique email is used
+   each run, so it never touches or breaks the real demo accounts' state.
 
 ## What's here
 
 - `index.js` — the whole server: mounts `routes/auth.js`, nothing else
 - `routes/auth.js` — thin routes, forward to the service functions
-- `services/auth-service.js` — login (`syncUserProfile`) and signup
-  (`getUserRole`, `sendVerification`, `verifyEmailToken`) logic, unchanged
-  from `ai-mentor`
+- `services/auth-service.js` — login (`syncUserProfile`), signup
+  (`getUserRole`, `sendVerification`, `verifyEmailToken`), verification
+  polling (`checkVerified`), and password reset (`sendPasswordReset`) logic,
+  unchanged from `ai-mentor`
 - `services/preferences.js` — small shared helper `syncUserProfile` depends on
-- `services/mailer.js` — sends the branded verification email (Resend, with
-  Gmail SMTP fallback)
+- `services/firebaseAdmin.js` — Firebase Admin SDK init, used by
+  `sendPasswordReset` to generate reset links
+- `services/mailer.js` — sends the branded verification/reset emails (Resend,
+  with Gmail SMTP fallback)
 - `services/supabase.js` — Supabase client
 - `utils/encryption.js` — used to decrypt the `phone` field in the `/sync` response
 
@@ -59,3 +66,5 @@ Two parts:
 | GET | `/user/role?email=` | Looks up an existing account's role (signup's "already registered" check) |
 | POST | `/user/send-verification` | Sends the branded "verify your email" link |
 | GET | `/user/verify/:token` | Verification link landing page — marks the account active |
+| GET | `/user/check-verified?email=` | Polled by the app every 2s while waiting for verification |
+| POST | `/user/send-password-reset` | Sends a Firebase password-reset link, delivered via the parent's email for `@aivorah.student` synthetic accounts |

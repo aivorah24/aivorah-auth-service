@@ -3,7 +3,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { syncUserProfile, getUserRole, sendVerification, verifyEmailToken } = require('../services/auth-service');
+const { syncUserProfile, getUserRole, sendVerification, verifyEmailToken, sendPasswordReset, checkVerified } = require('../services/auth-service');
 
 /**
  * @swagger
@@ -97,5 +97,45 @@ router.post('/send-verification', sendVerification);
  *       302: { description: Redirects to the frontend with verified=1 (success or already-verified) or error=1 (invalid/expired token) }
  */
 router.get('/verify/:token', verifyEmailToken);
+
+/**
+ * @swagger
+ * /user/send-password-reset:
+ *   post:
+ *     summary: Generate a Firebase password-reset link (rewritten to the app's themed page) and send it from aivorah24@gmail.com — for @aivorah.student synthetic accounts the email is delivered to the linked parent instead
+ *     tags: [User]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string }
+ *               frontendOrigin: { type: string, description: "Defaults to https://aivorah.ai" }
+ *     responses:
+ *       200:
+ *         description: "ok true (also returned, without leaking existence, when the account isn't found or has no deliverable parent email)"
+ *       400: { description: email missing }
+ */
+router.post('/send-password-reset', sendPasswordReset);
+
+/**
+ * @swagger
+ * /user/check-verified:
+ *   get:
+ *     summary: Get the current accountStatus for an email — polled by VerifyEmailScreen to detect when verification completes
+ *     tags: [User]
+ *     parameters:
+ *       - in: query
+ *         name: email
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: "{ verified: boolean, accountStatus }" }
+ *       400: { description: email missing }
+ */
+router.get('/check-verified', checkVerified);
 
 module.exports = router;
