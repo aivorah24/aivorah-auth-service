@@ -58,12 +58,42 @@ async function main() {
     check(`role is "${role}"`, roleBody.role === role);
   }
 
-  // NOTE: /user/send-verification and /user/verify/:token are NOT smoke-tested
-  // here on purpose - they WRITE to the account (flip accountStatus to
-  // pending_verification, send a real email) instead of just reading. Running
-  // that against our real demo accounts on every test run would break their
-  // "already verified" state. Covered instead by the Playwright signup specs
-  // in aivorah-e2e-tests, which use disposable throwaway emails.
+  // ── Signup flow: /user/send-verification and /user/verify/:token ──────────
+  // These WRITE to the account (flip accountStatus, send a real email), so
+  // they're run against a fresh DISPOSABLE email instead of the real demo
+  // accounts above - same trick the Playwright signup specs in
+  // aivorah-e2e-tests use, so it's safe to repeat on every run.
+  const signupEmail = `smoke.test.${Date.now()}@aivorah.demo`;
+  console.log(`\nSignup flow for a disposable account (${signupEmail})`);
+
+  console.log('POST /user/sync (simulates account creation, like signup does)');
+  const createRes = await fetch(`${BASE_URL}/user/sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Smoke Test User', email: signupEmail, role: 'student' }),
+  });
+  const createBody = await createRes.json();
+  check('account created (200)', createRes.status === 200);
+  check('role is "student"', createBody.role === 'student');
+
+  console.log('POST /user/send-verification');
+  const verifyRes = await fetch(`${BASE_URL}/user/send-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: signupEmail, name: 'Smoke Test User' }),
+  });
+  const verifyBody = await verifyRes.json();
+  check('returns 200', verifyRes.status === 200);
+  check('returns ok:true', verifyBody.ok === true);
+
+  console.log('GET /user/verify/:token with a deliberately WRONG token (we can\'t read the real email)');
+  const badTokenRes = await fetch(
+    `${BASE_URL}/user/verify/wrong-token-123?email=${encodeURIComponent(signupEmail)}`,
+    { redirect: 'manual' },
+  );
+  const location = badTokenRes.headers.get('location') || '';
+  check('redirects (3xx)', badTokenRes.status >= 300 && badTokenRes.status < 400);
+  check('redirect has error=1 (bad token correctly rejected)', location.includes('error=1'));
 
   console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} CHECK(S) FAILED`}`);
   process.exit(failures === 0 ? 0 : 1);
