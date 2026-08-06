@@ -1,15 +1,17 @@
-// The actual logic behind POST /user/sync — called on every login.
-// Upserts the Firebase-authenticated user into the Supabase users table
-// (read-only lookup if name is omitted), resolves school_id, and returns
-// the full profile.
+// The login + signup logic: syncUserProfile (called on every login and
+// signup), getUserRole/sendVerification/verifyEmailToken (signup + email
+// verification). Grouped in one file because they're the same domain -
+// "who is this user, are they who they claim" - not because they're the
+// same endpoint.
 //
 // Moved out of routes/user.js (was mixed in with photo upload, OTP, billing,
 // etc. in one 2,000+ line file). Behavior is unchanged from before the move.
 
-//Here we import supabase and two helper functions(decrypt and getPreferences).
+const crypto = require('crypto');
 const supabase = require('./supabase');
 const { decrypt } = require('../utils/encryption');
 const { getPreferences } = require('./preferences');
+const { sendVerificationEmail } = require('./mailer');
 
 async function syncUserProfile(req, res) {
   try {
@@ -165,4 +167,128 @@ async function syncUserProfile(req, res) {
   }
 }
 
-module.exports = { syncUserProfile };
+// GET /user/role — used on signup to show a helpful "already registered as
+// X" error, and to detect the teacher->parent dual-role case.
+async function getUserRole(req, res) {
+  const email = (req.query.email || '').toLowerCase().trim();
+  if (!email) return res.status(400).json({ error: 'email required' });
+  const { data, error } = await supabase.from('users').select('role').eq('email', email).maybeSingle();
+  if (error || !data) return res.status(404).json({ error: 'User not found' });
+  res.json({ role: data.role });
+}
+
+// POST /user/send-verification — generates a branded verification email
+// from aivorah24@gmail.com (not Firebase's own spam-flagged one).
+async function sendVerification(req, res) {
+  try {
+    const { email, name, frontendOrigin } = req.body;
+    if (!email || !name) return res.status(400).json({ error: 'email and name required' });
+
+    // Store token in user_preferences.data
+    const { data: existing } = await supabase
+      .from('user_preferences')
+      .select('data')
+      .eq('user_email', email.toLowerCase())
+      .maybeSingle();
+
+    const currentData = existing?.data || {};
+
+    // Idempotency guard (regression fix, 2026-07-20): an already-active account
+    // must never be resent a verification email or downgraded back to
+    // pending_verification. Without this, any caller that races ahead of a
+    // fresh accountStatus read (e.g. the client re-checking on every SSO
+    // login) silently re-parks a verified user in "pending" state.
+    if (currentData.accountStatus === 'active') {
+      return res.json({ ok: true, alreadyVerified: true });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiry = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+
+    await supabase.from('user_preferences').upsert({
+      user_email: email.toLowerCase(),
+      data: { ...currentData, verifyToken: token, verifyTokenExpiry: expiry, accountStatus: 'pending_verification' },
+    }, { onConflict: 'user_email' });
+
+    const serverBase = `${req.protocol}://${req.get('host')}`;
+    const appBase = frontendOrigin || 'https://aivorah.ai';
+    const redirect = encodeURIComponent(appBase + '/verify-success');
+    const encodedEmail = encodeURIComponent(email.toLowerCase());
+    const fullVerifyUrl = `${serverBase}/user/verify/${token}?email=${encodedEmail}&redirect=${redirect}`;
+
+    // Generate a short code and store the full URL so we can send a clean /v/:code link
+    const shortCode = crypto.randomBytes(5).toString('hex'); // 10-char hex
+    const expiresAt = new Date(expiry).toISOString();
+    await supabase.from('short_links').insert({ code: shortCode, url: fullVerifyUrl, expires_at: expiresAt });
+    const verifyUrl = `${serverBase}/v/${shortCode}`;
+
+    await sendVerificationEmail({ to: email, name, verifyUrl });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /user/verify/:token — called when the user clicks the verification
+// link in the email. Validates the token, marks the account active, then
+// redirects to the frontend.
+async function verifyEmailToken(req, res) {
+  const { token } = req.params;
+  const email = (req.query.email || '').toLowerCase();
+  const appRedirect = req.query.redirect || 'https://aivorah.ai/verify-success';
+
+  // Always redirect back to the app — pass ?verified=1 or ?error=1 so app can react
+  const successUrl = appRedirect.includes('?') ? `${appRedirect}&verified=1` : `${appRedirect}?verified=1`;
+  const errorUrl   = appRedirect.includes('?') ? `${appRedirect}&error=1`    : `${appRedirect}?error=1`;
+
+  try {
+    if (!email) {
+      console.warn('[verify] no email param');
+      return res.redirect(errorUrl);
+    }
+
+    // Look up by email (primary key) — no JSONB scanning
+    const { data: pref, error: fetchErr } = await supabase
+      .from('user_preferences')
+      .select('data')
+      .eq('user_email', email)
+      .maybeSingle();
+
+    console.log('[verify]', email, '| token match:', pref?.data?.verifyToken === token, '| fetchErr:', fetchErr?.message);
+
+    if (fetchErr || !pref) {
+      return res.redirect(errorUrl);
+    }
+
+    // Token already consumed (cleared after first verification) — this happens
+    // when an email client (e.g. Apple Mail Privacy Protection, Outlook Safe
+    // Links) pre-fetches the link before the user taps it, which verifies the
+    // account on the first hit. If the account is already active, treat any
+    // later hit on the same link as a success too, not an error.
+    if (pref.data?.verifyToken !== token) {
+      if (pref.data?.accountStatus === 'active') {
+        return res.redirect(successUrl);
+      }
+      return res.redirect(errorUrl);
+    }
+
+    const meta = pref.data || {};
+    if (meta.verifyTokenExpiry && Date.now() > meta.verifyTokenExpiry) {
+      return res.redirect(errorUrl);
+    }
+
+    // Mark verified — clear token, set active
+    await supabase.from('user_preferences').upsert({
+      user_email: email,
+      data: { ...meta, accountStatus: 'active', verifyToken: null, verifyTokenExpiry: null },
+    }, { onConflict: 'user_email' });
+
+    console.log('[verify] ✅ verified:', email);
+    res.redirect(successUrl);
+  } catch (err) {
+    console.error('[verify] unexpected error:', err);
+    res.redirect(errorUrl);
+  }
+}
+
+module.exports = { syncUserProfile, getUserRole, sendVerification, verifyEmailToken };

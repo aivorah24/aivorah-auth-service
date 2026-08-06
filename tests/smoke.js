@@ -49,7 +49,21 @@ async function main() {
     check('returns 200', res.status === 200);
     check(`role is "${role}"`, body.role === role);
     check('email matches', body.email === email);
+
+    // GET /user/role is a plain read, safe to check here too.
+    console.log(`GET /user/role for ${role} (${email})`);
+    const roleRes = await fetch(`${BASE_URL}/user/role?email=${encodeURIComponent(email)}`);
+    const roleBody = await roleRes.json();
+    check('returns 200', roleRes.status === 200);
+    check(`role is "${role}"`, roleBody.role === role);
   }
+
+  // NOTE: /user/send-verification and /user/verify/:token are NOT smoke-tested
+  // here on purpose - they WRITE to the account (flip accountStatus to
+  // pending_verification, send a real email) instead of just reading. Running
+  // that against our real demo accounts on every test run would break their
+  // "already verified" state. Covered instead by the Playwright signup specs
+  // in aivorah-e2e-tests, which use disposable throwaway emails.
 
   console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} CHECK(S) FAILED`}`);
   process.exit(failures === 0 ? 0 : 1);

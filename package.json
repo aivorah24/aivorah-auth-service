@@ -1,7 +1,7 @@
 {
   "name": "aivorah-auth-service",
   "version": "1.0.0",
-  "description": "Aivorah login microservice — extracted from ai-mentor/server/routes/user.js's /user/sync endpoint",
+  "description": "Aivorah login + signup microservice — extracted from ai-mentor/server/routes/user.js",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -12,7 +12,9 @@
     "@supabase/supabase-js": "^2.100.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "nodemailer": "^6.10.1",
+    "resend": "^6.12.3"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
