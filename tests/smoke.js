@@ -6,11 +6,18 @@
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:4001';
 
+// All 4 personas for the login-read checks. school_admin has no self-signup
+// in the real app (the signup role picker only offers student/teacher/parent),
+// so it's excluded from the signup-flow loop further down, on purpose.
 const DEMO_EMAILS = {
-  student: process.env.DEMO_STUDENT_EMAIL || 'demo.student@aivorah.demo',
-  teacher: process.env.DEMO_TEACHER_EMAIL || 'demo.teacher@aivorah.demo',
-  parent:  process.env.DEMO_PARENT_EMAIL  || 'demo.parent@aivorah.demo',
+  student:      process.env.DEMO_STUDENT_EMAIL || 'demo.student@aivorah.demo',
+  teacher:      process.env.DEMO_TEACHER_EMAIL || 'demo.teacher@aivorah.demo',
+  parent:       process.env.DEMO_PARENT_EMAIL  || 'demo.parent@aivorah.demo',
+  school_admin: process.env.DEMO_ADMIN_EMAIL   || 'schooladmin.tsra.test@aivorah.com',
 };
+
+// Only these 3 roles can self-signup - used by the signup-flow loop below.
+const SIGNUP_ROLES = ['student', 'teacher', 'parent'];
 
 let failures = 0;
 
@@ -60,40 +67,46 @@ async function main() {
 
   // ── Signup flow: /user/send-verification and /user/verify/:token ──────────
   // These WRITE to the account (flip accountStatus, send a real email), so
-  // they're run against a fresh DISPOSABLE email instead of the real demo
-  // accounts above - same trick the Playwright signup specs in
+  // each check runs against a fresh DISPOSABLE email instead of the real
+  // demo accounts above - same trick the Playwright signup specs in
   // aivorah-e2e-tests use, so it's safe to repeat on every run.
-  const signupEmail = `smoke.test.${Date.now()}@aivorah.demo`;
-  console.log(`\nSignup flow for a disposable account (${signupEmail})`);
+  //
+  // Looped across all 3 self-signup roles (not school_admin - see SIGNUP_ROLES
+  // above), so this actually exercises signup for student, teacher, AND
+  // parent, not just one of them.
+  for (const role of SIGNUP_ROLES) {
+    const signupEmail = `smoke.test.${role}.${Date.now()}@aivorah.demo`;
+    console.log(`\nSignup flow for a disposable ${role} account (${signupEmail})`);
 
-  console.log('POST /user/sync (simulates account creation, like signup does)');
-  const createRes = await fetch(`${BASE_URL}/user/sync`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Smoke Test User', email: signupEmail, role: 'student' }),
-  });
-  const createBody = await createRes.json();
-  check('account created (200)', createRes.status === 200);
-  check('role is "student"', createBody.role === 'student');
+    console.log('POST /user/sync (simulates account creation, like signup does)');
+    const createRes = await fetch(`${BASE_URL}/user/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Smoke Test User', email: signupEmail, role }),
+    });
+    const createBody = await createRes.json();
+    check('account created (200)', createRes.status === 200);
+    check(`role is "${role}"`, createBody.role === role);
 
-  console.log('POST /user/send-verification');
-  const verifyRes = await fetch(`${BASE_URL}/user/send-verification`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: signupEmail, name: 'Smoke Test User' }),
-  });
-  const verifyBody = await verifyRes.json();
-  check('returns 200', verifyRes.status === 200);
-  check('returns ok:true', verifyBody.ok === true);
+    console.log('POST /user/send-verification');
+    const verifyRes = await fetch(`${BASE_URL}/user/send-verification`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: signupEmail, name: 'Smoke Test User' }),
+    });
+    const verifyBody = await verifyRes.json();
+    check('returns 200', verifyRes.status === 200);
+    check('returns ok:true', verifyBody.ok === true);
 
-  console.log('GET /user/verify/:token with a deliberately WRONG token (we can\'t read the real email)');
-  const badTokenRes = await fetch(
-    `${BASE_URL}/user/verify/wrong-token-123?email=${encodeURIComponent(signupEmail)}`,
-    { redirect: 'manual' },
-  );
-  const location = badTokenRes.headers.get('location') || '';
-  check('redirects (3xx)', badTokenRes.status >= 300 && badTokenRes.status < 400);
-  check('redirect has error=1 (bad token correctly rejected)', location.includes('error=1'));
+    console.log('GET /user/verify/:token with a deliberately WRONG token (we can\'t read the real email)');
+    const badTokenRes = await fetch(
+      `${BASE_URL}/user/verify/wrong-token-123?email=${encodeURIComponent(signupEmail)}`,
+      { redirect: 'manual' },
+    );
+    const location = badTokenRes.headers.get('location') || '';
+    check('redirects (3xx)', badTokenRes.status >= 300 && badTokenRes.status < 400);
+    check('redirect has error=1 (bad token correctly rejected)', location.includes('error=1'));
+  }
 
   console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} CHECK(S) FAILED`}`);
   process.exit(failures === 0 ? 0 : 1);
