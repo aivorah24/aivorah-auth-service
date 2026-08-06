@@ -22,17 +22,18 @@ npm start               # listens on PORT (default 4001)
 npm test
 ```
 
-Runs `tests/smoke.js` — hits `/health`, `/user/sync`, and `/user/role` for
-student, teacher, and parent demo accounts, checks the responses. Requires the
-service to already be running (`npm start` in another terminal) and reachable
-Supabase credentials in `.env`.
+Runs `tests/smoke.js`. Requires the service to already be running (`npm start`
+in another terminal) and reachable Supabase + email credentials in `.env`.
 
-`/user/send-verification` and `/user/verify/:token` are NOT smoke-tested here
-on purpose — they write to the account (flip `accountStatus`, send a real
-email) rather than just read, so running them against the real demo accounts
-on every test run would break their "already verified" state. Those two are
-covered by the Playwright signup specs in `aivorah-e2e-tests`, which use
-disposable throwaway emails instead.
+Two parts:
+1. **Login checks** — `/health`, `/user/sync`, `/user/role` against the real
+   student/teacher/parent demo accounts. Read-only, safe to repeat.
+2. **Signup flow** — creates a disposable throwaway account (`/user/sync`
+   with a name), sends it a real verification email (`/user/send-verification`),
+   then confirms a deliberately wrong token gets rejected
+   (`/user/verify/:token`). Uses a fresh unique email each run (same trick the
+   Playwright signup specs in `aivorah-e2e-tests` use), so it never touches
+   or breaks the real demo accounts' verified state.
 
 ## What's here
 
