@@ -30,6 +30,30 @@ app.get('/v/:code', async (req, res) => {
   res.redirect(link.url);
 });
 
+// Serves the real NCERT textbook PDFs for the "View in Book" reading pane.
+// Files live in the private Supabase Storage bucket "ncert-books" (path
+// mirrors grade<N>/<subject>/<code>.pdf), uploaded by ai-mentor's
+// scripts/upload-pdfs-to-supabase.js. This route was ported over from
+// ai-mentor/server/index.js, whose equivalent route was never actually live
+// on the deployed aivorah.ai backend — every request fell through to that
+// app's SPA catch-all and returned index.html (200 OK), so the iframe
+// silently rendered the landing page instead of a book page.
+const NCERT_BOOKS_BUCKET = 'ncert-books';
+app.get('/data/ncert_books/*', async (req, res) => {
+  const key = req.path.replace(/^\/data\/ncert_books\//, '');
+  try {
+    const { data, error } = await supabase.storage
+      .from(NCERT_BOOKS_BUCKET)
+      .createSignedUrl(key, 600); // 10 min — plenty for one page view
+    if (error || !data?.signedUrl) {
+      return res.status(404).json({ error: 'Book page not found' });
+    }
+    return res.redirect(302, data.signedUrl);
+  } catch (e) {
+    return res.status(404).json({ error: 'Book page not found' });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ ok: true, service: 'aivorah-auth-service' }));
 
 const PORT = process.env.PORT || 4001;
