@@ -80,6 +80,46 @@ describe('syncUserProfile', () => {
     );
   });
 
+  // Regression test for the "Gender/DOB/State missing on re-login" bug
+  // (2026-08-26): dob/gender/state/country are now real `users` columns
+  // (selected above alongside grade/curriculum/school) and must round-trip
+  // through this response the same way those fields already do — no
+  // separate/fallible call needed to get them.
+  test('login returns the real dob/gender/state/country columns from users', async () => {
+    supabase._chain.maybeSingle.mockResolvedValueOnce({
+      data: {
+        id: '1', email: 'a@a.com', role: 'teacher', onboarding_complete: true,
+        dob: '15/06/1990', gender: 'Female', state: 'Karnataka', country: 'India',
+      },
+      error: null,
+    });
+    getPreferences.mockResolvedValueOnce({ roles: ['teacher'], isPro: false });
+
+    const req = { body: { email: 'a@a.com' } };
+    const res = mockRes();
+    await syncUserProfile(req, res);
+
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ dob: '15/06/1990', gender: 'Female', state: 'Karnataka', country: 'India' })
+    );
+  });
+
+  test('login for a user with no dob/gender/state/country yet returns null, not undefined/crash', async () => {
+    supabase._chain.maybeSingle.mockResolvedValueOnce({
+      data: { id: '1', email: 'a@a.com', role: 'teacher', onboarding_complete: true },
+      error: null,
+    });
+    getPreferences.mockResolvedValueOnce({ roles: ['teacher'], isPro: false });
+
+    const req = { body: { email: 'a@a.com' } };
+    const res = mockRes();
+    await syncUserProfile(req, res);
+
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ dob: null, gender: null, state: null, country: null })
+    );
+  });
+
   test('login for a student also upserts student_stats (auto-create side effect)', async () => {
     supabase._chain.maybeSingle.mockResolvedValueOnce({
       data: { id: '1', email: 'a@a.com', role: 'student', onboarding_complete: true },

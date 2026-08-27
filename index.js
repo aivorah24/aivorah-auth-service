@@ -5,6 +5,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const authRoute = require('./routes/auth');
+const accountRoute = require('./routes/account');
 const supabase = require('./services/supabase');
 
 const app = express();
@@ -12,6 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use('/user', authRoute);
+app.use('/user', accountRoute);
 
 // Resolves the short verification link (/v/:code) emailed to users back to
 // the full /user/verify/:token?... URL stored at send-verification time.

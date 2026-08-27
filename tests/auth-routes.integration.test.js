@@ -80,6 +80,26 @@ describe('POST /user/sync', () => {
     expect(res.body.onboardingComplete).toBe(true);
     expect(supabase._chain.upsert).not.toHaveBeenCalled();
   });
+
+  // Regression test for the "Gender/DOB/State missing on re-login" bug
+  // (2026-08-26) — a full round-trip through the real route: these 4 fields
+  // must come back on every login response, the same call that already
+  // reliably returns grade/curriculum/school.
+  test('login (email only) -> 200, real dob/gender/state/country come back too', async () => {
+    supabase._chain.maybeSingle.mockResolvedValueOnce({
+      data: {
+        id: '11', email: 'existing@a.com', role: 'teacher', onboarding_complete: true,
+        dob: '15/06/1990', gender: 'Female', state: 'Karnataka', country: 'India',
+      },
+      error: null,
+    });
+    getPreferences.mockResolvedValueOnce({ roles: ['teacher'], isPro: true });
+
+    const res = await request(app).post('/user/sync').send({ email: 'existing@a.com' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ dob: '15/06/1990', gender: 'Female', state: 'Karnataka', country: 'India' });
+  });
 });
 
 describe('GET /user/role', () => {

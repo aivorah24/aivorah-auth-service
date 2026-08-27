@@ -69,7 +69,7 @@ async function syncUserProfile(req, res) {
     if (isReadOnly) {
       ({ data, error } = await supabase
         .from('users')
-        .select('id, name, email, role, grade, school, school_id, curriculum, location, phone, onboarding_complete, photo_url')
+        .select('id, name, email, role, grade, school, school_id, curriculum, location, phone, onboarding_complete, photo_url, dob, gender, state, country')
         .eq('email', patch.email)
         .maybeSingle());
     } else {
@@ -94,7 +94,7 @@ async function syncUserProfile(req, res) {
       ({ data, error } = await supabase
         .from('users')
         .upsert(patch, { onConflict: 'email' })
-        .select('id, name, email, role, grade, school, school_id, curriculum, location, phone, onboarding_complete, photo_url')
+        .select('id, name, email, role, grade, school, school_id, curriculum, location, phone, onboarding_complete, photo_url, dob, gender, state, country')
         .single());
 
       // Fresh signup + leftover user_preferences from a previously DELETED account:
@@ -150,6 +150,16 @@ async function syncUserProfile(req, res) {
       // Trust the DB column directly. NULL means not complete (new/migrated accounts).
       onboardingComplete: data.onboarding_complete === true,
       photoUrl:           data.photo_url ?? null,
+      // dob/gender/state/country: added 2026-08-26, now real `users` columns
+      // (see aivorah-profile-service) instead of living only in
+      // user_preferences — that split was the root cause of a bug where
+      // these 3 fields silently vanished on next login whenever the
+      // separate GET /user/preferences call failed, while everything
+      // selected from `users` here never did.
+      dob:                data.dob ?? null,
+      gender:             data.gender ?? null,
+      state:              data.state ?? null,
+      country:            data.country ?? null,
       isPro:              prefs?.isPro === true,
       // For auto-generated @aivorah.student accounts: default to true (must change) unless
       // explicitly cleared (false) after the student has changed their password.
