@@ -7,6 +7,11 @@ const mockUsersMaybeSingle = jest.fn();
 const mockUsersSingle = jest.fn();
 const mockListUsers = jest.fn();
 const mockUpdateUserById = jest.fn();
+// Records every .eq(column, value) call made against parent_children.delete()
+// — lets tests assert the real column name used, so a regression back to the
+// nonexistent 'child_email' column (see accountManagement.js RCA) is caught
+// instead of silently passing against a generic eq() stub.
+const parentChildrenDeleteEqCalls = [];
 
 jest.mock('../services/supabase', () => ({
   auth: {
@@ -21,6 +26,17 @@ jest.mock('../services/supabase', () => ({
         select: () => ({ eq: () => ({ maybeSingle: mockUsersMaybeSingle }) }),
         update: () => ({ eq: () => ({ select: () => ({ single: mockUsersSingle }) }) }),
         delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    }
+    if (table === 'parent_children') {
+      return {
+        delete: () => ({
+          eq: (column, value) => {
+            parentChildrenDeleteEqCalls.push([column, value]);
+            return Promise.resolve({ error: null });
+          },
+        }),
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
       };
     }
     // Every other email-keyed table in the propagation loop / delete-account
@@ -67,6 +83,7 @@ const app = require('../index');
 
 beforeEach(() => {
   jest.clearAllMocks();
+  parentChildrenDeleteEqCalls.length = 0;
   mockSendEmailOtpCode.mockResolvedValue(undefined);
   mockSetOtp.mockResolvedValue(undefined);
   mockDeleteOtp.mockResolvedValue(undefined);
@@ -161,5 +178,26 @@ describe('DELETE /user/delete-account', () => {
     const res = await request(app).delete('/user/delete-account').send({ email: 'gone@a.com' });
     expect(res.status).toBe(200);
     expect(mockFbDeleteUser).not.toHaveBeenCalled();
+  });
+
+  // Regression for a real bug found during Bug #1 RCA (2026-09-11): this route
+  // used to filter parent_children.delete() on 'child_email', a column that
+  // doesn't exist on that table (schema only has 'child_id', FK to users.id) —
+  // the query silently errored and no-op'd, so a deleted CHILD's link row was
+  // only ever removed by the users-table cascade, never by this explicit call.
+  test('deleting an account that is a linked CHILD removes its parent_children row by child_id, not a nonexistent child_email column', async () => {
+    mockUsersMaybeSingle.mockResolvedValue({ data: { id: 'child-row-id-1' }, error: null });
+    const res = await request(app).delete('/user/delete-account').send({ email: 'child@a.com' });
+    expect(res.status).toBe(200);
+    expect(parentChildrenDeleteEqCalls).toContainEqual(['child_id', 'child-row-id-1']);
+    expect(parentChildrenDeleteEqCalls.some(([col]) => col === 'child_email')).toBe(false);
+  });
+
+  test('deleting an account with no users row still removes it as a PARENT, and skips the child_id delete (no id to key on)', async () => {
+    mockUsersMaybeSingle.mockResolvedValue({ data: null, error: null });
+    const res = await request(app).delete('/user/delete-account').send({ email: 'ghost-parent@a.com' });
+    expect(res.status).toBe(200);
+    expect(parentChildrenDeleteEqCalls).toContainEqual(['parent_email', 'ghost-parent@a.com']);
+    expect(parentChildrenDeleteEqCalls.some(([col]) => col === 'child_id')).toBe(false);
   });
 });

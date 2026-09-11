@@ -212,9 +212,11 @@ async function deleteAccount(req, res) {
     if (!email) return res.status(400).json({ error: 'email required' });
     const emailLc = email.trim().toLowerCase();
 
-    await supabase.from('parent_children').delete().eq('parent_email', emailLc);
-    await supabase.from('parent_children').delete().eq('child_email', emailLc);
     const { data: userRow } = await supabase.from('users').select('id').eq('email', emailLc).maybeSingle();
+    await supabase.from('parent_children').delete().eq('parent_email', emailLc);
+    // parent_children has no child_email column (only child_id, FK to users.id)
+    // — this used to filter on a nonexistent column and silently no-op.
+    if (userRow?.id) await supabase.from('parent_children').delete().eq('child_id', userRow.id);
     await supabase.from('student_stats').delete().eq('student_id', userRow?.id || '');
     await supabase.from('user_preferences').delete().eq('user_email', emailLc);
     await supabase.from('users').delete().eq('email', emailLc);
