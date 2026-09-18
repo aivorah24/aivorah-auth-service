@@ -12,6 +12,10 @@ const mockUpdateUserById = jest.fn();
 // nonexistent 'child_email' column (see accountManagement.js RCA) is caught
 // instead of silently passing against a generic eq() stub.
 const parentChildrenDeleteEqCalls = [];
+// Records every .eq(column, value) call made against messages.delete() —
+// lets tests assert delete-account actually purges the email-keyed
+// conversation history (see accountManagement.js RCA, Bug #9).
+const messagesDeleteEqCalls = [];
 
 jest.mock('../services/supabase', () => ({
   auth: {
@@ -37,6 +41,16 @@ jest.mock('../services/supabase', () => ({
           },
         }),
         update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    }
+    if (table === 'messages') {
+      return {
+        delete: () => ({
+          eq: (column, value) => {
+            messagesDeleteEqCalls.push([column, value]);
+            return Promise.resolve({ error: null });
+          },
+        }),
       };
     }
     // Every other email-keyed table in the propagation loop / delete-account
@@ -84,6 +98,7 @@ const app = require('../index');
 beforeEach(() => {
   jest.clearAllMocks();
   parentChildrenDeleteEqCalls.length = 0;
+  messagesDeleteEqCalls.length = 0;
   mockSendEmailOtpCode.mockResolvedValue(undefined);
   mockSetOtp.mockResolvedValue(undefined);
   mockDeleteOtp.mockResolvedValue(undefined);
@@ -199,5 +214,16 @@ describe('DELETE /user/delete-account', () => {
     expect(res.status).toBe(200);
     expect(parentChildrenDeleteEqCalls).toContainEqual(['parent_email', 'ghost-parent@a.com']);
     expect(parentChildrenDeleteEqCalls.some(([col]) => col === 'child_id')).toBe(false);
+  });
+
+  // Bug #9 (2026-09-19): messages/message_reactions are keyed by
+  // sender_email/recipient_email (see aivorah-messages-service), not user
+  // id — this route never cleaned them up, so re-registering with the same
+  // email immediately resurrected the old conversation history.
+  test('deleting an account also purges its messages, as both sender and recipient', async () => {
+    const res = await request(app).delete('/user/delete-account').send({ email: 'gone@a.com' });
+    expect(res.status).toBe(200);
+    expect(messagesDeleteEqCalls).toContainEqual(['sender_email', 'gone@a.com']);
+    expect(messagesDeleteEqCalls).toContainEqual(['recipient_email', 'gone@a.com']);
   });
 });

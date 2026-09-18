@@ -219,6 +219,12 @@ async function deleteAccount(req, res) {
     if (userRow?.id) await supabase.from('parent_children').delete().eq('child_id', userRow.id);
     await supabase.from('student_stats').delete().eq('student_id', userRow?.id || '');
     await supabase.from('user_preferences').delete().eq('user_email', emailLc);
+    // messages/message_reactions are keyed by email, not user id (see
+    // aivorah-messages-service/routes/messages.js) — never cleaned up here,
+    // so re-registering with the same email immediately resurrected the old
+    // conversation history. message_reactions cascades on message delete.
+    await supabase.from('messages').delete().eq('sender_email', emailLc);
+    await supabase.from('messages').delete().eq('recipient_email', emailLc);
     await supabase.from('users').delete().eq('email', emailLc);
 
     try {
