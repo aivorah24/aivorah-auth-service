@@ -13,6 +13,7 @@ const supabase = require('./supabase');
 const firebaseAdmin = require('./firebaseAdmin');
 const { decrypt } = require('../utils/encryption');
 const { getPreferences } = require('./preferences');
+const { normalizeCurriculum } = require('../utils/curriculum');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('./mailer');
 
 async function syncUserProfile(req, res) {
@@ -27,7 +28,7 @@ async function syncUserProfile(req, res) {
     if (name)       patch.name       = name;
     if (grade)      patch.grade      = grade;
     if (school)     patch.school     = school?.trim();
-    if (curriculum) patch.curriculum = curriculum;
+    if (curriculum) patch.curriculum = normalizeCurriculum(curriculum);
     if (location)   patch.location   = location;
 
     // Resolve the free-text school to a schools row so new users don't pile up
@@ -144,7 +145,7 @@ async function syncUserProfile(req, res) {
       // independent self-signup (no official school link). The client uses this
       // to hide school-only features (My Classes, Attendance) for B2C users.
       schoolId:           data.school_id ?? null,
-      curriculum:         data.curriculum,
+      curriculum:         normalizeCurriculum(data.curriculum),
       location:           data.location,
       phone:              data.phone ? decrypt(data.phone) : null,
       // Trust the DB column directly. NULL means not complete (new/migrated accounts).
