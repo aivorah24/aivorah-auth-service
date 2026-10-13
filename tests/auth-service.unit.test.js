@@ -275,6 +275,36 @@ describe('syncUserProfile', () => {
     );
   });
 
+  test('signup with curriculum "NCERT" stores CBSE', async () => {
+    supabase._chain.maybeSingle
+      .mockResolvedValueOnce({ data: null, error: null })
+      .mockResolvedValueOnce({ data: null, error: null });
+    supabase._chain.single.mockResolvedValueOnce({
+      data: { id: '3', email: 'c@a.com', role: 'student', curriculum: 'CBSE' }, error: null,
+    });
+    getPreferences.mockResolvedValueOnce(null);
+
+    const res = mockRes();
+    await syncUserProfile({ body: { name: 'C', email: 'c@a.com', role: 'student', curriculum: ' ncert ' } }, res);
+
+    expect(supabase._chain.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ curriculum: 'CBSE' }), { onConflict: 'email' }
+    );
+  });
+
+  test('login for a legacy "NCERT" user returns CBSE', async () => {
+    supabase._chain.maybeSingle.mockResolvedValueOnce({
+      data: { id: '1', email: 'a@a.com', role: 'teacher', curriculum: 'NCERT', onboarding_complete: true },
+      error: null,
+    });
+    getPreferences.mockResolvedValueOnce(null);
+
+    const res = mockRes();
+    await syncUserProfile({ body: { email: 'a@a.com' } }, res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ curriculum: 'CBSE' }));
+  });
+
   test('existing user with a different role is NOT switched to the incoming role', async () => {
     supabase._chain.maybeSingle
       .mockResolvedValueOnce({ data: { id: '3', role: 'teacher' }, error: null }); // existingRow lookup
