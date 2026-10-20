@@ -16,6 +16,9 @@ const { getPreferences } = require('./preferences');
 const { normalizeCurriculum } = require('../utils/curriculum');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('./mailer');
 
+// Admin roles are provisioned by the admin services, never self-assigned here.
+const SELF_SIGNUP_ROLES = new Set(['student', 'teacher', 'parent']);
+
 async function syncUserProfile(req, res) {
   try {
     const { name, email, role, grade, school, curriculum, location } = req.body;
@@ -85,7 +88,10 @@ async function syncUserProfile(req, res) {
       // different one (e.g. opening a differently-roled screen with the same
       // login). An intentional role change goes through /user/add-role instead.
       if (role) {
-        if (!existingRow || !existingRow.role || existingRow.role === role) {
+        const isNewRole = !existingRow || !existingRow.role;
+        if (isNewRole && !SELF_SIGNUP_ROLES.has(role)) {
+          console.warn(`[/user/sync] Refused self-signup role "${role}" for ${patch.email}`);
+        } else if (isNewRole || existingRow.role === role) {
           patch.role = role;
         } else {
           console.warn(`[/user/sync] Ignored role change for ${patch.email}: existing="${existingRow.role}" incoming="${role}"`);

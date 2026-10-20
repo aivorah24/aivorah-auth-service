@@ -3,6 +3,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { requireSelf } = require('../middleware/tokenCheck');
 const { syncUserProfile, getUserRole, sendVerification, verifyEmailToken, sendPasswordReset, checkVerified } = require('../services/auth-service');
 
 /**
@@ -31,7 +32,7 @@ const { syncUserProfile, getUserRole, sendVerification, verifyEmailToken, sendPa
  *         description: "Full user profile (id, name, email, role, roles, grade, school, schoolId, curriculum, phone, onboardingComplete, photoUrl, isPro, mustChangePassword, accountStatus); or just email plus onboardingComplete false if no row exists yet"
  *       400: { description: email missing }
  */
-router.post('/sync', syncUserProfile);
+router.post('/sync', requireSelf((req) => req.body?.email), syncUserProfile);
 
 /**
  * @swagger

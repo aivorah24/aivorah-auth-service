@@ -175,14 +175,32 @@ describe('POST /user/change-email', () => {
 });
 
 describe('DELETE /user/delete-account', () => {
-  test('missing email -> 400', async () => {
-    const res = await request(app).delete('/user/delete-account').send({});
-    expect(res.status).toBe(400);
+  beforeEach(() => {
+    mockVerifyIdToken.mockImplementation(async (token) => ({ email: token, auth_time: Math.floor(Date.now() / 1000) }));
+  });
+
+  test('no sign-in token -> 401, nothing deleted', async () => {
+    const res = await request(app).delete('/user/delete-account').send({ email: 'gone@a.com' });
+    expect(res.status).toBe(401);
+    expect(mockFbDeleteUser).not.toHaveBeenCalled();
+  });
+
+  test("another user's email -> 403, nothing deleted", async () => {
+    const res = await request(app).delete('/user/delete-account').set('Authorization', 'Bearer me@a.com').send({ email: 'victim@a.com' });
+    expect(res.status).toBe(403);
+    expect(mockFbDeleteUser).not.toHaveBeenCalled();
+  });
+
+  test('login not re-confirmed recently -> 401', async () => {
+    mockVerifyIdToken.mockResolvedValueOnce({ email: 'gone@a.com', auth_time: Math.floor(Date.now() / 1000) - 3600 });
+    const res = await request(app).delete('/user/delete-account').set('Authorization', 'Bearer gone@a.com').send({ email: 'gone@a.com' });
+    expect(res.status).toBe(401);
+    expect(mockFbDeleteUser).not.toHaveBeenCalled();
   });
 
   test('a real account deletion also removes the Firebase Auth user', async () => {
     mockGetUserByEmail.mockResolvedValue({ uid: 'fb-uid-2' });
-    const res = await request(app).delete('/user/delete-account').send({ email: 'gone@a.com' });
+    const res = await request(app).delete('/user/delete-account').set('Authorization', 'Bearer gone@a.com').send({ email: 'gone@a.com' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
     expect(mockFbDeleteUser).toHaveBeenCalledWith('fb-uid-2');
@@ -190,7 +208,7 @@ describe('DELETE /user/delete-account', () => {
 
   test('no matching Firebase user -> still succeeds (best-effort)', async () => {
     mockGetUserByEmail.mockRejectedValue({ code: 'auth/user-not-found' });
-    const res = await request(app).delete('/user/delete-account').send({ email: 'gone@a.com' });
+    const res = await request(app).delete('/user/delete-account').set('Authorization', 'Bearer gone@a.com').send({ email: 'gone@a.com' });
     expect(res.status).toBe(200);
     expect(mockFbDeleteUser).not.toHaveBeenCalled();
   });
@@ -202,7 +220,7 @@ describe('DELETE /user/delete-account', () => {
   // only ever removed by the users-table cascade, never by this explicit call.
   test('deleting an account that is a linked CHILD removes its parent_children row by child_id, not a nonexistent child_email column', async () => {
     mockUsersMaybeSingle.mockResolvedValue({ data: { id: 'child-row-id-1' }, error: null });
-    const res = await request(app).delete('/user/delete-account').send({ email: 'child@a.com' });
+    const res = await request(app).delete('/user/delete-account').set('Authorization', 'Bearer child@a.com').send({ email: 'child@a.com' });
     expect(res.status).toBe(200);
     expect(parentChildrenDeleteEqCalls).toContainEqual(['child_id', 'child-row-id-1']);
     expect(parentChildrenDeleteEqCalls.some(([col]) => col === 'child_email')).toBe(false);
@@ -210,7 +228,7 @@ describe('DELETE /user/delete-account', () => {
 
   test('deleting an account with no users row still removes it as a PARENT, and skips the child_id delete (no id to key on)', async () => {
     mockUsersMaybeSingle.mockResolvedValue({ data: null, error: null });
-    const res = await request(app).delete('/user/delete-account').send({ email: 'ghost-parent@a.com' });
+    const res = await request(app).delete('/user/delete-account').set('Authorization', 'Bearer ghost-parent@a.com').send({ email: 'ghost-parent@a.com' });
     expect(res.status).toBe(200);
     expect(parentChildrenDeleteEqCalls).toContainEqual(['parent_email', 'ghost-parent@a.com']);
     expect(parentChildrenDeleteEqCalls.some(([col]) => col === 'child_id')).toBe(false);
@@ -221,7 +239,7 @@ describe('DELETE /user/delete-account', () => {
   // id — this route never cleaned them up, so re-registering with the same
   // email immediately resurrected the old conversation history.
   test('deleting an account also purges its messages, as both sender and recipient', async () => {
-    const res = await request(app).delete('/user/delete-account').send({ email: 'gone@a.com' });
+    const res = await request(app).delete('/user/delete-account').set('Authorization', 'Bearer gone@a.com').send({ email: 'gone@a.com' });
     expect(res.status).toBe(200);
     expect(messagesDeleteEqCalls).toContainEqual(['sender_email', 'gone@a.com']);
     expect(messagesDeleteEqCalls).toContainEqual(['recipient_email', 'gone@a.com']);
