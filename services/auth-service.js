@@ -73,7 +73,7 @@ async function syncUserProfile(req, res) {
     if (isReadOnly) {
       ({ data, error } = await supabase
         .from('users')
-        .select('id, name, email, role, grade, school, school_id, curriculum, location, phone, onboarding_complete, photo_url, dob, gender, state, country')
+        .select('id, name, email, role, grade, school, school_id, curriculum, location, phone, onboarding_complete, photo_url, dob, gender, state, country, status')
         .eq('email', patch.email)
         .maybeSingle());
     } else {
@@ -101,7 +101,7 @@ async function syncUserProfile(req, res) {
       ({ data, error } = await supabase
         .from('users')
         .upsert(patch, { onConflict: 'email' })
-        .select('id, name, email, role, grade, school, school_id, curriculum, location, phone, onboarding_complete, photo_url, dob, gender, state, country')
+        .select('id, name, email, role, grade, school, school_id, curriculum, location, phone, onboarding_complete, photo_url, dob, gender, state, country, status')
         .single());
 
       // Fresh signup + leftover user_preferences from a previously DELETED account:
@@ -151,6 +151,10 @@ async function syncUserProfile(req, res) {
       // independent self-signup (no official school link). The client uses this
       // to hide school-only features (My Classes, Attendance) for B2C users.
       schoolId:           data.school_id ?? null,
+      // users.status: 'active' | 'inactive' | 'archived'. A student archived by
+      // their school keeps school_id; the client uses this to offer Connect to
+      // School so they can join a new one.
+      status:             data.status ?? 'active',
       curriculum:         normalizeCurriculum(data.curriculum),
       location:           data.location,
       phone:              data.phone ? decrypt(data.phone) : null,

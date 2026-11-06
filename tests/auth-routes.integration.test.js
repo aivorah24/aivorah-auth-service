@@ -81,6 +81,28 @@ describe('POST /user/sync', () => {
     expect(supabase._chain.upsert).not.toHaveBeenCalled();
   });
 
+  test('login returns the account status, so an archived student can be offered Connect to School', async () => {
+    supabase._chain.maybeSingle.mockResolvedValueOnce({
+      data: { id: '12', email: 'kid@a.com', role: 'student', school_id: 'old-school', status: 'archived', onboarding_complete: true },
+      error: null,
+    });
+    getPreferences.mockResolvedValueOnce({});
+    const res = await request(app).post('/user/sync').send({ email: 'kid@a.com' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ schoolId: 'old-school', status: 'archived' });
+    expect(supabase._chain.select).toHaveBeenCalledWith(expect.stringContaining('status'));
+  });
+
+  test('a row without a status reads as active', async () => {
+    supabase._chain.maybeSingle.mockResolvedValueOnce({
+      data: { id: '13', email: 'old@a.com', role: 'student', onboarding_complete: true },
+      error: null,
+    });
+    getPreferences.mockResolvedValueOnce({});
+    const res = await request(app).post('/user/sync').send({ email: 'old@a.com' });
+    expect(res.body.status).toBe('active');
+  });
+
   // Regression test for the "Gender/DOB/State missing on re-login" bug
   // (2026-08-26) — a full round-trip through the real route: these 4 fields
   // must come back on every login response, the same call that already
