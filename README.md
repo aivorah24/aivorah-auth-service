@@ -68,3 +68,25 @@ Two parts:
 | GET | `/user/verify/:token` | Verification link landing page — marks the account active |
 | GET | `/user/check-verified?email=` | Polled by the app every 2s while waiting for verification |
 | POST | `/user/send-password-reset` | Sends a Firebase password-reset link, delivered via the parent's email for `@aivorah.student` synthetic accounts |
+
+## Face login (passkeys)
+
+`/user/passkeys/*` (routes/passkeys.js, services/passkeys.js): sign in with the
+device's own face / fingerprint unlock (Face ID, Windows Hello, Android). The
+biometric check never leaves the device; Aivorah stores only each device's
+public key (table `user_passkeys`, aivorah-db 0022). A verified face login
+returns a Firebase custom token (`signInWithCustomToken` in the app).
+
+| Route | Who |
+|---|---|
+| `POST /user/passkeys/register/options`, `POST /user/passkeys/register` | signed in within the last 30 min |
+| `GET /user/passkeys`, `DELETE /user/passkeys/:id` | signed in (own passkeys only) |
+| `POST /user/passkeys/login/options`, `POST /user/passkeys/login` | anyone (the device proves who they are) |
+
+Env: `FIREBASE_SERVICE_ACCOUNT_B64` (already set; needed to mint the token),
+optional `PASSKEY_ORIGINS` (comma list of app origins allowed to use face
+login; defaults to aivorah-frontend.vercel.app, aivorah.ai and localhost),
+optional `PASSKEY_SECRET` (signs the short-lived challenges; derived from the
+service account when unset). A passkey belongs to the website it was created
+on, so one made on aivorah-frontend.vercel.app works there only.
+
