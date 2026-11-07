@@ -12,6 +12,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Face login (passkeys): mounted first, so no /user/:param route can catch it.
+app.use('/user/passkeys', require('./routes/passkeys'));
 app.use('/user', authRoute);
 app.use('/user', accountRoute);
 
