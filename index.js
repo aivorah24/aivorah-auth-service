@@ -1,6 +1,7 @@
 // Standalone login microservice — extracted from ai-mentor/server/routes/user.js.
 // Serves the same /user/sync endpoint the app already calls, on its own port.
 
+const compression = require('compression');
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -9,6 +10,8 @@ const accountRoute = require('./routes/account');
 const supabase = require('./services/supabase');
 
 const app = express();
+// gzip responses before they leave the service (smaller JSON on slow connections).
+app.use(compression());
 app.use(cors());
 app.use(express.json());
 
